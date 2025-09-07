@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"math/rand"
+
 	"github.com/deoreal/pokedexcli/internal/pokecache"
 )
 
@@ -17,6 +19,7 @@ type config struct {
 	nextURL     *string
 	previousURL *string
 	cache       *pokecache.Cache
+	pokedex     map[string]Pokemon // map of caught pokemon
 }
 
 type cliCommand struct {
@@ -114,6 +117,16 @@ var Commands = map[string]cliCommand{
 		description: "Displays the Pokémon in a location area",
 		callback:    commandExplore,
 	},
+	"catch": {
+		name:        "catch",
+		description: "Try to catch a Pokémon by name",
+		callback:    commandCatch,
+	},
+	"inspect": {
+		name:        "inspect",
+		description: "Prints the stats of a Pokémon",
+		callback:    commandInspect,
+	},
 }
 
 // trimMultipleSpaces removes all leading and trailing spaces and reduces all spaces to single spaces
@@ -156,9 +169,11 @@ func processInput(input string, cfg *config) {
 		fmt.Println("Unknown command")
 	} else {
 		var err error
-		if commandName == "explore" {
+		// Pass arguments for commands that expect them (all except help, exit, map, mapb)
+		switch commandName {
+		case "explore", "catch":
 			err = cmd.callback(cfg, in[1:])
-		} else {
+		default:
 			err = cmd.callback(cfg)
 		}
 		if err != nil {
@@ -201,7 +216,8 @@ func main() {
 	cache := pokecache.NewCache(5 * time.Second)
 
 	cfg := &config{
-		cache: cache,
+		cache:   cache,
+		pokedex: make(map[string]Pokemon),
 	}
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -236,6 +252,7 @@ func commandHelp(cfg *config, args ...[]string) error {
 	fmt.Println("map: Displays the names of 20 location areas")
 	fmt.Println("mapb: Displays the previous 20 location areas")
 	fmt.Println("explore <location-area-name>: Displays the Pokémon in a location area")
+	fmt.Println("catch <pokemon-name>: Try to catch a Pokémon by name")
 	fmt.Println("exit: Exit the Pokedex")
 	fmt.Println()
 	return nil
@@ -314,6 +331,68 @@ func commandMap(cfg *config, args ...[]string) error {
 		fmt.Println(result.Name)
 	}
 	fmt.Println()
+
+	return nil
+}
+
+// Pokemon struct for storing caught Pokemon
+type Pokemon struct {
+	Name           string `json:"name"`
+	BaseExperience int    `json:"base_experience"`
+}
+
+func commandCatch(cfg *config, args ...[]string) error {
+	if len(args) == 0 || len(args[0]) == 0 {
+		fmt.Println("You must provide a Pokémon name")
+		return nil
+	}
+	pokemonName := args[0][0]
+	fmt.Printf("Throwing a Pokeball at %s...\n", pokemonName)
+
+	url := fmt.Sprintf("https://pokeapi.co/api/v2/pokemon/%s", pokemonName)
+	body, err := makeRequest(url, cfg.cache)
+	if err != nil {
+		fmt.Printf("Could not find Pokémon: %s\n", pokemonName)
+		return nil
+	}
+
+	var pokeResp struct {
+		Name           string `json:"name"`
+		BaseExperience int    `json:"base_experience"`
+	}
+	err = json.Unmarshal(body, &pokeResp)
+	if err != nil {
+		fmt.Println("Error parsing Pokémon data")
+		return nil
+	}
+
+	// Already caught?
+	if _, ok := cfg.pokedex[pokeResp.Name]; ok {
+		fmt.Printf("%s is already in your Pokedex!\n", pokeResp.Name)
+		return nil
+	}
+
+	// Determine catch chance: base 50%, minus (base_experience / 2)%, min 1%, max 90%
+	catchChance := 50 - pokeResp.BaseExperience/2
+	if catchChance < 1 {
+		catchChance = 1
+	}
+	if catchChance > 90 {
+		catchChance = 90
+	}
+
+	rand.Seed(time.Now().UnixNano())
+	roll := rand.Intn(100) + 1 // 1-100
+
+	if roll <= catchChance {
+		fmt.Printf("Congratulations! You caught %s!\n", pokeResp.Name)
+		cfg.pokedex[pokeResp.Name] = Pokemon{
+			Name:           pokeResp.Name,
+			BaseExperience: pokeResp.BaseExperience,
+		}
+	} else {
+		fmt.Printf("%s escaped!\n", pokeResp.Name)
+	}
 
 	return nil
 }
