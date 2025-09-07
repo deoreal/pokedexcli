@@ -124,8 +124,13 @@ var Commands = map[string]cliCommand{
 	},
 	"inspect": {
 		name:        "inspect",
-		description: "Prints the stats of a Pokémon",
+		description: "Inspect a caught Pokémon",
 		callback:    commandInspect,
+	},
+	"pokedex": {
+		name:        "pokedex",
+		description: "List all Pokémon you have caught",
+		callback:    commandPokedex,
 	},
 }
 
@@ -171,7 +176,7 @@ func processInput(input string, cfg *config) {
 		var err error
 		// Pass arguments for commands that expect them (all except help, exit, map, mapb)
 		switch commandName {
-		case "explore", "catch":
+		case "explore", "catch", "inspect":
 			err = cmd.callback(cfg, in[1:])
 		default:
 			err = cmd.callback(cfg)
@@ -253,6 +258,8 @@ func commandHelp(cfg *config, args ...[]string) error {
 	fmt.Println("mapb: Displays the previous 20 location areas")
 	fmt.Println("explore <location-area-name>: Displays the Pokémon in a location area")
 	fmt.Println("catch <pokemon-name>: Try to catch a Pokémon by name")
+	fmt.Println("inspect <pokemon-name>: Inspect a caught Pokémon")
+	fmt.Println("pokedex: List all Pokémon you have caught")
 	fmt.Println("exit: Exit the Pokedex")
 	fmt.Println()
 	return nil
@@ -337,8 +344,17 @@ func commandMap(cfg *config, args ...[]string) error {
 
 // Pokemon struct for storing caught Pokemon
 type Pokemon struct {
-	Name           string `json:"name"`
-	BaseExperience int    `json:"base_experience"`
+	Name           string   `json:"name"`
+	BaseExperience int      `json:"base_experience"`
+	Height         int      `json:"height"`
+	Weight         int      `json:"weight"`
+	Stats          []Stat   `json:"stats"`
+	Types          []string `json:"types"`
+}
+
+type Stat struct {
+	Name  string `json:"name"`
+	Value int    `json:"value"`
 }
 
 func commandCatch(cfg *config, args ...[]string) error {
@@ -359,6 +375,19 @@ func commandCatch(cfg *config, args ...[]string) error {
 	var pokeResp struct {
 		Name           string `json:"name"`
 		BaseExperience int    `json:"base_experience"`
+		Height         int    `json:"height"`
+		Weight         int    `json:"weight"`
+		Stats          []struct {
+			BaseStat int `json:"base_stat"`
+			Stat     struct {
+				Name string `json:"name"`
+			} `json:"stat"`
+		} `json:"stats"`
+		Types []struct {
+			Type struct {
+				Name string `json:"name"`
+			} `json:"type"`
+		} `json:"types"`
 	}
 	err = json.Unmarshal(body, &pokeResp)
 	if err != nil {
@@ -386,14 +415,65 @@ func commandCatch(cfg *config, args ...[]string) error {
 
 	if roll <= catchChance {
 		fmt.Printf("Congratulations! You caught %s!\n", pokeResp.Name)
+		// Prepare stats and types for storage
+		stats := make([]Stat, 0, len(pokeResp.Stats))
+		for _, s := range pokeResp.Stats {
+			stats = append(stats, Stat{
+				Name:  s.Stat.Name,
+				Value: s.BaseStat,
+			})
+		}
+		types := make([]string, 0, len(pokeResp.Types))
+		for _, t := range pokeResp.Types {
+			types = append(types, t.Type.Name)
+		}
 		cfg.pokedex[pokeResp.Name] = Pokemon{
 			Name:           pokeResp.Name,
 			BaseExperience: pokeResp.BaseExperience,
+			Height:         pokeResp.Height,
+			Weight:         pokeResp.Weight,
+			Stats:          stats,
+			Types:          types,
 		}
 	} else {
 		fmt.Printf("%s escaped!\n", pokeResp.Name)
 	}
 
+	return nil
+}
+
+func commandInspect(cfg *config, args ...[]string) error {
+	if len(args) == 0 || len(args[0]) == 0 {
+		fmt.Println("You must provide a Pokémon name")
+		return nil
+	}
+	pokemonName := args[0][0]
+	p, ok := cfg.pokedex[pokemonName]
+	if !ok {
+		fmt.Printf("You have not caught %s yet.\n", pokemonName)
+		return nil
+	}
+	fmt.Printf("Name: %s\n", p.Name)
+	fmt.Printf("Height: %d\n", p.Height)
+	fmt.Printf("Weight: %d\n", p.Weight)
+	fmt.Printf("Types: %s\n", strings.Join(p.Types, ", "))
+	fmt.Println("Stats:")
+	for _, stat := range p.Stats {
+		fmt.Printf("  %s: %d\n", stat.Name, stat.Value)
+	}
+	return nil
+}
+
+// commandPokedex prints the names of all caught Pokémon
+func commandPokedex(cfg *config, args ...[]string) error {
+	if len(cfg.pokedex) == 0 {
+		fmt.Println("You haven't caught any Pokémon yet!")
+		return nil
+	}
+	fmt.Println("Your Pokedex:")
+	for name := range cfg.pokedex {
+		fmt.Printf(" - %s\n", name)
+	}
 	return nil
 }
 
